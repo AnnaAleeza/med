@@ -1,182 +1,217 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>The Medieval Archives (Loading...)</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>The Medieval Archives — Galleries</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;padding:0;background:#f6f7fb;color:#111}
-    .center{display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column}
-    .spinner{border:6px solid #eee;border-top-color:#3b82f6;border-radius:50%;width:64px;height:64px;animation:spin 1s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    .msg{margin-top:16px;color:#333}
-    a.small{font-size:0.9rem;color:#555}
+    :root{--gap:12px;--card-bg:#fff;--muted:#6b7280}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#f8fafc;color:#0f172a}
+    header{padding:20px 24px;border-bottom:1px solid #e6edf3;background:#fff;display:flex;align-items:center;justify-content:space-between}
+    h1{font-size:1.25rem;margin:0}
+    .controls{display:flex;gap:12px;align-items:center}
+    button{background:#0ea5e9;border:none;padding:8px 12px;color:white;border-radius:8px;cursor:pointer}
+    .container{max-width:1100px;margin:24px auto;padding:0 16px}
+    section{margin-bottom:28px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:var(--gap)}
+    .card{background:var(--card-bg);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,0.04);border:1px solid #e6eef6}
+    .card img{display:block;width:100%;height:160px;object-fit:cover}
+    .meta{padding:10px 12px}
+    .title{font-weight:600;margin:0;font-size:0.95rem}
+    .caption{margin:6px 0 0;color:var(--muted);font-size:0.86rem}
+    footer{padding:18px;text-align:center;color:var(--muted);font-size:0.9rem}
+    .loader{color:var(--muted);font-size:0.95rem}
+    a.attribution{color:#0ea5e9;text-decoration:none;font-size:0.86rem}
+    @media (max-width:520px){ .card img{height:120px} }
   </style>
 </head>
 <body>
-  <div class="center" id="app">
-    <div class="spinner" aria-hidden></div>
-    <div class="msg">Preparing the Medieval Archives website…</div>
-    <div style="margin-top:12px"><a class="small" id="rawlink" href="#">View ZIP (raw)</a></div>
-  </div>
+  <header>
+    <h1>The Medieval Archives — Image Galleries</h1>
+    <div class="controls">
+      <button id="loadSiteBtn">Open archived site (ZIP)</button>
+      <a class="attribution" href="https://github.com/AnnaAleeza/med" target="_blank">Repo</a>
+    </div>
+  </header>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+  <main class="container">
+    <section id="arts">
+      <h2>Arts (paintings)</h2>
+      <div class="grid" id="artsGrid">
+        <!-- arts images inserted here -->
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <div class="grid" id="archGrid">
+        <!-- architecture images inserted here -->
+      </div>
+    </section>
+
+    <section id="people">
+      <h2>People (portraits)</h2>
+      <div class="grid" id="peopleGrid">
+        <!-- people images inserted here -->
+      </div>
+    </section>
+
+    <div id="siteArea"></div>
+  </main>
+
+  <footer>
+    Images are pulled from Wikimedia Commons (public domain or Commons-licensed). Click an image to open its Commons file page.
+  </footer>
+
   <script>
+  // Categories: arrays of search strings that we'll use with the Wikimedia Commons API to find files.
+  const categories = {
+    arts: [
+      'The Night Watch Rembrandt',
+      'Arnolfini Portrait Jan van Eyck',
+      'The Birth of Venus Botticelli',
+      'Mona Lisa Leonardo da Vinci'
+    ],
+    architecture: [
+      'Chartres Cathedral interior',
+      'Hall of Mirrors Palace of Versailles',
+      'Colosseum, Rome'
+    ],
+    people: [
+      'Rembrandt self-portrait',
+      'Van Gogh self-portrait',
+      'Elizabeth I of England portrait'
+    ]
+  };
+
+  const commonsApiBase = 'https://commons.wikimedia.org/w/api.php?origin=*';
+
+  async function findFileFor(term){
+    // Search File namespace (ns=6)
+    const url = `${commonsApiBase}&action=query&format=json&list=search&srsearch=${encodeURIComponent(term)}&srnamespace=6&srlimit=1`;
+    try{
+      const r = await fetch(url);
+      const j = await r.json();
+      const hits = j.query && j.query.search;
+      if(hits && hits.length) return hits[0].title; // e.g. 'File:...'
+      return null;
+    }catch(e){console.warn('search failed',term,e);return null}
+  }
+
+  async function fileInfo(title){
+    const url = `${commonsApiBase}&action=query&format=json&prop=imageinfo&titles=${encodeURIComponent(title)}&iiprop=url|extmetadata`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const pages = j.query && j.query.pages;
+    const pageKey = Object.keys(pages||{})[0];
+    const page = pages[pageKey];
+    if(page && page.imageinfo && page.imageinfo.length){
+      return {info: page.imageinfo[0], title: page.title};
+    }
+    return null;
+  }
+
+  function makeCard(href, src, title, caption){
+    const wrapper = document.createElement('div'); wrapper.className='card';
+    const a = document.createElement('a'); a.href = href; a.target='_blank'; a.rel='noopener';
+    const img = document.createElement('img'); img.src = src; img.alt = title || '';
+    a.appendChild(img);
+    const meta = document.createElement('div'); meta.className='meta';
+    const t = document.createElement('div'); t.className='title'; t.textContent = title || '';
+    const c = document.createElement('div'); c.className='caption'; c.innerHTML = caption || '';
+    meta.appendChild(t); meta.appendChild(c);
+    wrapper.appendChild(a); wrapper.appendChild(meta);
+    return wrapper;
+  }
+
+  async function populateGrid(gridId, terms){
+    const grid = document.getElementById(gridId);
+    grid.innerHTML = '<div class="loader">Loading images…</div>';
+    const results = [];
+    for(const term of terms){
+      const title = await findFileFor(term);
+      if(!title) continue;
+      const fi = await fileInfo(title);
+      if(!fi || !fi.info || !fi.info.url) continue;
+      const src = fi.info.url;
+      const commonsPage = 'https://commons.wikimedia.org/wiki/' + encodeURIComponent(fi.title.replace(/ /g,'_'));
+      const artist = (fi.info.extmetadata && fi.info.extmetadata.Artist && fi.info.extmetadata.Artist.value) || '';
+      const license = (fi.info.extmetadata && fi.info.extmetadata.LicenseShortName && fi.info.extmetadata.LicenseShortName.value) || '';
+      const caption = `${artist ? artist + ' · ' : ''}${license ? license : ''} <br><a class="attribution" href="${commonsPage}" target="_blank">Commons</a>`;
+      results.push(makeCard(commonsPage, src, fi.title.replace(/^File:/,''), caption));
+    }
+    grid.innerHTML='';
+    if(results.length===0) grid.innerHTML='<div class="loader">No images found for this category.</div>';
+    for(const el of results) grid.appendChild(el);
+  }
+
+  // Kick off population
   (async function(){
+    populateGrid('artsGrid', categories.arts);
+    populateGrid('archGrid', categories.architecture);
+    populateGrid('peopleGrid', categories.people);
+  })();
+
+  // --- ZIP site loader (runs only when user clicks the button) ---
+  document.getElementById('loadSiteBtn').addEventListener('click', ()=>{
+    loadZipSite();
+  });
+
+  async function loadZipSite(){
+    const btn = document.getElementById('loadSiteBtn');
+    btn.disabled = true; btn.textContent = 'Loading archived site…';
     const repoUser = 'AnnaAleeza';
     const repoName = 'med';
     const zipPath = 'The%20Medieval%20Archives%20Website.zip';
     const rawUrl = `https://raw.githubusercontent.com/${repoUser}/${repoName}/main/${zipPath}`;
 
-    const app = document.getElementById('app');
-    const msg = app.querySelector('.msg');
-    const rawlink = document.getElementById('rawlink');
-    rawlink.href = rawUrl;
-    rawlink.target = '_blank';
-
     try{
-      msg.textContent = 'Downloading site archive...';
-      const resp = await fetch(rawUrl);
-      if(!resp.ok) throw new Error('Failed to download ZIP: ' + resp.status);
-      const ab = await resp.arrayBuffer();
+      // Load JSZip dynamically
+      if(typeof JSZip === 'undefined'){
+        await new Promise((res,rej)=>{
+          const s = document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js';
+          s.onload = res; s.onerror = rej; document.head.appendChild(s);
+        });
+      }
 
-      msg.textContent = 'Extracting files...';
+      const resp = await fetch(rawUrl);
+      if(!resp.ok) throw new Error('Could not download ZIP: '+resp.status);
+      const ab = await resp.arrayBuffer();
       const zip = await JSZip.loadAsync(ab);
 
-      // Build blob URL map
-      const blobMap = Object.create(null);
-      const textFiles = Object.create(null);
+      // find index
+      const files = [];
+      zip.forEach((p,f)=>{ if(!f.dir) files.push(p); });
+      let indexPath = files.find(p=>p.toLowerCase()==='deploy/index.html') || files.find(p=>p.toLowerCase().endsWith('/index.html')) || files.find(p=>p.toLowerCase()==='index.html');
+      if(!indexPath) throw new Error('No index.html found inside ZIP');
 
-      const mimeFor = (name)=>{
-        const ext = name.split('.').pop().toLowerCase();
-        const map = {
-          'html':'text/html','htm':'text/html','css':'text/css','js':'application/javascript',
-          'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','gif':'image/gif','svg':'image/svg+xml',
-          'webp':'image/webp','woff2':'font/woff2','woff':'font/woff','ttf':'font/ttf','eot':'application/vnd.ms-fontobject',
-          'ico':'image/x-icon','json':'application/json','map':'application/json','txt':'text/plain','xml':'application/xml',
-          'pdf':'application/pdf'
-        };
-        return map[ext] || 'application/octet-stream';
-      };
+      const html = await zip.file(indexPath).async('string');
 
-      const fileEntries = [];
-      zip.forEach((relativePath, file)=>{
-        if(!file.dir) fileEntries.push(relativePath);
-      });
-
-      // Create blobs for each file. For text-like files keep text for replacements
-      for(const path of fileEntries){
-        const lower = path.toLowerCase();
-        const isText = /\.(html?|css|js|json|txt|xml|map)$/.test(lower);
+      // prepare blobs map
+      const blobMap = {};
+      for(const p of files){
         try{
-          if(isText){
-            const content = await zip.file(path).async('string');
-            textFiles[path] = content;
-            const blob = new Blob([content], {type: mimeFor(path)});
-            blobMap[path] = URL.createObjectURL(blob);
-          } else {
-            const abuf = await zip.file(path).async('arraybuffer');
-            const blob = new Blob([abuf], {type: mimeFor(path)});
-            blobMap[path] = URL.createObjectURL(blob);
-          }
-        }catch(e){
-          console.warn('failed read',path,e);
-        }
+          const isText = /\.(html?|css|js|json|svg|txt|xml|map)$/i.test(p);
+          if(isText){ const txt = await zip.file(p).async('string'); blobMap[p]=URL.createObjectURL(new Blob([txt],{type:'text/plain'})); }
+          else { const abuf = await zip.file(p).async('arraybuffer'); blobMap[p]=URL.createObjectURL(new Blob([abuf])); }
+        }catch(e){console.warn('blob fail',p,e)}
       }
 
-      msg.textContent = 'Locating index.html inside archive...';
-
-      // Prefer deploy/index.html then index.html at root then any /index.html
-      const indexCandidates = ['deploy/index.html','index.html'];
-      let indexPath = indexCandidates.find(p=>fileEntries.includes(p));
-      if(!indexPath){
-        indexPath = fileEntries.find(p=>p.toLowerCase().endsWith('/index.html')) || fileEntries.find(p=>p.toLowerCase().endsWith('index.html'));
-      }
-      if(!indexPath) throw new Error('No index.html found in ZIP archive');
-
-      msg.textContent = 'Preparing site content...';
-      let html = textFiles[indexPath] || await zip.file(indexPath).async('string');
-
-      // Replace relative URLs in HTML: src/href and srcset and form action
-      const replaceRelative = (input)=>{
-        return input.replace(/(src|href|data-src|data-href)=(["'])([^"']+)\2/gi, (m,attr,quote,url)=>{
-          // ignore absolute URLs
-          if(url.startsWith('http')||url.startsWith('//')||url.startsWith('data:')||url.startsWith('#')) return `${attr}=${quote}${url}${quote}`;
-          // normalize path relative to indexPath's folder
-          const base = indexPath.includes('/') ? indexPath.slice(0,indexPath.lastIndexOf('/')+1) : '';
-          const candidate = (base + url).replace(/(^|\/)\.\//g,'$1');
-          // try direct match or without ./
-          if(blobMap[candidate]) return `${attr}=${quote}${blobMap[candidate]}${quote}`;
-          // try plain url
-          if(blobMap[url]) return `${attr}=${quote}${blobMap[url]}${quote}`;
-          // try decoding URL-encoded names
-          try{const dec = decodeURIComponent(url); if(blobMap[dec]) return `${attr}=${quote}${blobMap[dec]}${quote}`;}catch(e){}
-          return `${attr}=${quote}${url}${quote}`;
-        }).replace(/srcset=(["'])([^"']+)\1/gi, (m,quote,val)=>{
-          // naive srcset: replace each url
-          const parts = val.split(',').map(p=>p.trim()).map(p=>{
-            const [u, w] = p.split(' ');
-            if(u.startsWith('http')||u.startsWith('//')||u.startsWith('data:')) return p;
-            const base = indexPath.includes('/') ? indexPath.slice(0,indexPath.lastIndexOf('/')+1) : '';
-            const candidate = (base + u).replace(/(^|\/)\.\//g,'$1');
-            const resolved = blobMap[candidate]||blobMap[u]||u;
-            return `${resolved}${w? ' '+w : ''}`;
-          });
-          return `srcset=${quote}${parts.join(', ')}${quote}`;
-        });
-      };
-
-      html = replaceRelative(html);
-
-      // Also rewrite CSS files' url(...) occurrences by creating new CSS content with blob URLs
-      for(const path of Object.keys(textFiles)){
-        if(path.toLowerCase().endsWith('.css')){
-          let css = textFiles[path];
-          css = css.replace(/url\(([^)]+)\)/gi, (m,inurl)=>{
-            let u = inurl.trim().replace(/^['"]|['"]$/g,'');
-            if(u.startsWith('data:')||u.startsWith('http')||u.startsWith('//')) return `url(${u})`;
-            const base = path.includes('/') ? path.slice(0,path.lastIndexOf('/')+1) : '';
-            const candidate = (base + u).replace(/(^|\/)\.\//g,'$1');
-            const resolved = blobMap[candidate]||blobMap[u]||u;
-            return `url(${resolved})`;
-          });
-          // replace the blob URL for this css file (we created one earlier) with a new one that contains rewritten CSS
-          const newBlob = new Blob([css], {type:'text/css'});
-          const newUrl = URL.createObjectURL(newBlob);
-          // find original path key (exact)
-          if(blobMap[path]) blobMap[path] = newUrl;
-        }
-      }
-
-      msg.textContent = 'Rendering site...';
-
-      // Write HTML into an iframe to isolate scripts/styles
-      const iframe = document.createElement('iframe');
-      iframe.style.border='0'; iframe.style.width='100%'; iframe.style.height='100vh';
-      document.body.innerHTML='';
-      document.body.appendChild(iframe);
-
-      // Before writing, ensure any relative links in HTML that we didn't replace (like to other pages) are adjusted to use blobMap
-      // A simple replacement for href="otherpage.html"
-      html = html.replace(/href=(["'])([^"'#]+)\1/gi, (m,quote,u)=>{
-        if(u.startsWith('http')||u.startsWith('//')||u.startsWith('data:')||u.startsWith('#')) return m;
-        const base = indexPath.includes('/') ? indexPath.slice(0,indexPath.lastIndexOf('/')+1) : '';
-        const candidate = (base + u).replace(/(^|\/)\.\//g,'$1');
-        const resolved = blobMap[candidate]||blobMap[u]||u;
-        return `href=${quote}${resolved}${quote}`;
-      });
-
-      // Inject into iframe
+      // create iframe and write the index HTML into it. For simplicity, we won't rewrite every link; the embedded site may work for many cases.
+      const siteArea = document.getElementById('siteArea');
+      siteArea.innerHTML = '';
+      const iframe = document.createElement('iframe'); iframe.style.width='100%'; iframe.style.height='80vh'; iframe.style.border='0';
+      siteArea.appendChild(iframe);
       const idoc = iframe.contentDocument || iframe.contentWindow.document;
-      idoc.open();
-      idoc.write(html);
-      idoc.close();
+      idoc.open(); idoc.write(html); idoc.close();
 
+      btn.textContent = 'Archived site loaded';
     }catch(err){
       console.error(err);
-      app.innerHTML = '<div style="padding:24px"><h2>Failed to publish site</h2><pre>'+String(err)+'</pre><p>If the ZIP is large or requires a build step, we can extract it in the repository instead. Tell me if you want that.</p></div>';
+      alert('Failed to load archived site: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Open archived site (ZIP)';
     }
-  })();
+  }
   </script>
 </body>
 </html>
