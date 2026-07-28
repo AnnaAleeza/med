@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>The Medieval Archives (Loading...)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;padding:0;background:#f6f7fb;color:#111}
+    .center{display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column}
+    .spinner{border:6px solid #eee;border-top-color:#3b82f6;border-radius:50%;width:64px;height:64px;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .msg{margin-top:16px;color:#333}
+    a.small{font-size:0.9rem;color:#555}
+  </style>
+</head>
+<body>
+  <div class="center" id="app">
+    <div class="spinner" aria-hidden></div>
+    <div class="msg">Preparing the Medieval Archives website…</div>
+    <div style="margin-top:12px"><a class="small" id="rawlink" href="#">View ZIP (raw)</a></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+  <script>
+  (async function(){
+    const repoUser = 'AnnaAleeza';
+    const repoName = 'med';
+    const zipPath = 'The%20Medieval%20Archives%20Website.zip';
+    const rawUrl = `https://raw.githubusercontent.com/${repoUser}/${repoName}/main/${zipPath}`;
+
+    const app = document.getElementById('app');
+    const msg = app.querySelector('.msg');
+    const rawlink = document.getElementById('rawlink');
+    rawlink.href = rawUrl;
+    rawlink.target = '_blank';
+
+    try{
+      msg.textContent = 'Downloading site archive...';
+      const resp = await fetch(rawUrl);
+      if(!resp.ok) throw new Error('Failed to download ZIP: ' + resp.status);
+      const ab = await resp.arrayBuffer();
+
+      msg.textContent = 'Extracting files...';
+      const zip = await JSZip.loadAsync(ab);
+
+      // Build blob URL map
+      const blobMap = Object.create(null);
+      const textFiles = Object.create(null);
+
+      const mimeFor = (name)=>{
+        const ext = name.split('.').pop().toLowerCase();
+        const map = {
+          'html':'text/html','htm':'text/html','css':'text/css','js':'application/javascript',
+          'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','gif':'image/gif','svg':'image/svg+xml',
+          'webp':'image/webp','woff2':'font/woff2','woff':'font/woff','ttf':'font/ttf','eot':'application/vnd.ms-fontobject',
+          'ico':'image/x-icon','json':'application/json','map':'application/json','txt':'text/plain','xml':'application/xml',
+          'pdf':'application/pdf'
+        };
+        return map[ext] || 'application/octet-stream';
+      };
+
+      const fileEntries = [];
+      zip.forEach((relativePath, file)=>{
+        if(!file.dir) fileEntries.push(relativePath);
+      });
+
+      // Create blobs for each file. For text-like files keep text for replacements
+      for(const path of fileEntries){
+        const lower = path.toLowerCase();
+        const isText = /\.(html?|css|js|json|txt|xml|map)$/.test(lower);
+        try{
+          if(isText){
+            const content = await zip.file(path).async('string');
+            textFiles[path] = content;
+            const blob = new Blob([content], {type: mimeFor(path)});
+            blobMap[path] = URL.createObjectURL(blob);
+          } else {
+            const abuf = await zip.file(path).async('arraybuffer');
+            const blob = new Blob([abuf], {type: mimeFor(path)});
+            blobMap[path] = URL.createObjectURL(blob);
+          }
+        }catch(e){
+          console.warn('failed read',path,e);
+        }
+      }
+
+      msg.textContent = 'Locating index.html inside archive...';
+
+      // Prefer deploy/index.html then index.html at root then any /index.html
+      const indexCandidates = ['deploy/index.html','index.html'];
+      let indexPath = indexCandidates.find(p=>fileEntries.includes(p));
+      if(!indexPath){
+        indexPath = fileEntries.find(p=>p.toLowerCase().endsWith('/index.html')) || fileEntries.find(p=>p.toLowerCase().endsWith('index.html'));
+      }
+      if(!indexPath) throw new Error('No index.html found in ZIP archive');
+
+      msg.textContent = 'Preparing site content...';
+      let html = textFiles[indexPath] || await zip.file(indexPath).async('string');
+
+      // Replace relative URLs in HTML: src/href and srcset and form action
+      const replaceRelative = (input)=>{
+        return input.replace(/(src|href|data-src|data-href)=(["'])([^"']+)\2/gi, (m,attr,quote,url)=>{
+          // ignore absolute URLs
+          if(url.startsWith('http')||url.startsWith('//')||url.startsWith('data:')||url.startsWith('#')) return `${attr}=${quote}${url}${quote}`;
+          // normalize path relative to indexPath's folder
+          const base = indexPath.includes('/') ? indexPath.slice(0,indexPath.lastIndexOf('/')+1) : '';
+          const candidate = (base + url).replace(/(^|\/)\.\//g,'$1');
+          // try direct match or without ./
+          if(blobMap[candidate]) return `${attr}=${quote}${blobMap[candidate]}${quote}`;
+          // try plain url
+          if(blobMap[url]) return `${attr}=${quote}${blobMap[url]}${quote}`;
+          // try decoding URL-encoded names
+          try{const dec = decodeURIComponent(url); if(blobMap[dec]) return `${attr}=${quote}${blobMap[dec]}${quote}`;}catch(e){}
+          return `${attr}=${quote}${url}${quote}`;
+        }).replace(/srcset=(["'])([^"']+)\1/gi, (m,quote,val)=>{
+          // naive srcset: replace each url
+          const parts = val.split(',').map(p=>p.trim()).map(p=>{
+            const [u, w] = p.split(' ');
+            if(u.startsWith('http')||u.startsWith('//')||u.startsWith('data:')) return p;
+            const base = indexPath.includes('/') ? indexPath.slice(0,indexPath.lastIndexOf('/')+1) : '';
+            const candidate = (base + u).replace(/(^|\/)\.\//g,'$1');
+            const resolved = blobMap[candidate]||blobMap[u]||u;
+            return `${resolved}${w? ' '+w : ''}`;
+          });
+          return `srcset=${quote}${parts.join(', ')}${quote}`;
+        });
+      };
+
+      html = replaceRelative(html);
+
+      // Also rewrite CSS files' url(...) occurrences by creating new CSS content with blob URLs
+      for(const path of Object.keys(textFiles)){
+        if(path.toLowerCase().endsWith('.css')){
+          let css = textFiles[path];
+          css = css.replace(/url\(([^)]+)\)/gi, (m,inurl)=>{
+            let u = inurl.trim().replace(/^['"]|['"]$/g,'');
+            if(u.startsWith('data:')||u.startsWith('http')||u.startsWith('//')) return `url(${u})`;
+            const base = path.includes('/') ? path.slice(0,path.lastIndexOf('/')+1) : '';
+            const candidate = (base + u).replace(/(^|\/)\.\//g,'$1');
+            const resolved = blobMap[candidate]||blobMap[u]||u;
+            return `url(${resolved})`;
+          });
+          // replace the blob URL for this css file (we created one earlier) with a new one that contains rewritten CSS
+          const newBlob = new Blob([css], {type:'text/css'});
+          const newUrl = URL.createObjectURL(newBlob);
+          // find original path key (exact)
+          if(blobMap[path]) blobMap[path] = newUrl;
+        }
+      }
+
+      msg.textContent = 'Rendering site...';
+
+      // Write HTML into an iframe to isolate scripts/styles
+      const iframe = document.createElement('iframe');
+      iframe.style.border='0'; iframe.style.width='100%'; iframe.style.height='100vh';
+      document.body.innerHTML='';
+      document.body.appendChild(iframe);
+
+      // Before writing, ensure any relative links in HTML that we didn't replace (like to other pages) are adjusted to use blobMap
+      // A simple replacement for href="otherpage.html"
+      html = html.replace(/href=(["'])([^"'#]+)\1/gi, (m,quote,u)=>{
+        if(u.startsWith('http')||u.startsWith('//')||u.startsWith('data:')||u.startsWith('#')) return m;
+        const base = indexPath.includes('/') ? indexPath.slice(0,indexPath.lastIndexOf('/')+1) : '';
+        const candidate = (base + u).replace(/(^|\/)\.\//g,'$1');
+        const resolved = blobMap[candidate]||blobMap[u]||u;
+        return `href=${quote}${resolved}${quote}`;
+      });
+
+      // Inject into iframe
+      const idoc = iframe.contentDocument || iframe.contentWindow.document;
+      idoc.open();
+      idoc.write(html);
+      idoc.close();
+
+    }catch(err){
+      console.error(err);
+      app.innerHTML = '<div style="padding:24px"><h2>Failed to publish site</h2><pre>'+String(err)+'</pre><p>If the ZIP is large or requires a build step, we can extract it in the repository instead. Tell me if you want that.</p></div>';
+    }
+  })();
+  </script>
+</body>
+</html>
